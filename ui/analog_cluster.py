@@ -1,125 +1,392 @@
-import math
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton # pyright: ignore[reportMissingImports]
-from PyQt5.QtCore    import Qt, QRectF, QPointF # pyright: ignore[reportMissingImports]
-from PyQt5.QtGui     import QPainter, QColor, QPen, QBrush, QFont, QRadialGradient # pyright: ignore[reportMissingImports]
+from PyQt5.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QSizePolicy,
+    QLabel,
+    QFrame
+)
 
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor
 
-class GaugeWidget(QWidget):
-    def __init__(self, label, unit, min_val, max_val,
-                 warn=None, danger=None, arc_start=220, arc_span=260,
-                 c_normal="#22c55e", c_warn="#f59e0b", c_danger="#ef4444", parent=None):
-        super().__init__(parent)
-        self.label=label; self.unit=unit; self.min_val=min_val; self.max_val=max_val
-        self.warn=warn or max_val*0.7; self.danger=danger or max_val*0.9
-        self.arc_start=arc_start; self.arc_span=arc_span
-        self.cn=QColor(c_normal); self.cw=QColor(c_warn); self.cd=QColor(c_danger)
-        self._value=min_val; self.setMinimumSize(160,160)
+from ui.oem_analog.analog_shell import AnalogShell
+from ui.oem_analog.analog_screen import AnalogScreen
 
-    def set_value(self,v):
-        self._value=max(self.min_val,min(self.max_val,v)); self.update()
+from ui.oem_analog.widgets.fuel_gauge import FuelGaugeWidget
+from ui.oem_analog.widgets.indicator_panel import IndicatorPanel
 
-    def _angle(self,v):
-        return self.arc_start-((v-self.min_val)/max(1,self.max_val-self.min_val))*self.arc_span
-
-    def paintEvent(self,_):
-        p=QPainter(self); p.setRenderHint(QPainter.Antialiasing)
-        w,h=self.width(),self.height(); cx,cy=w/2,h/2; r=min(w,h)/2-10
-        gr=QRadialGradient(cx,cy,r); gr.setColorAt(0,QColor("#0d1b2e")); gr.setColorAt(1,QColor("#060e1a"))
-        p.setBrush(QBrush(gr)); p.setPen(QPen(QColor("#1e293b"),2))
-        p.drawEllipse(QRectF(cx-r,cy-r,r*2,r*2))
-        rr=r-5; rect=QRectF(cx-rr,cy-rr,rr*2,rr*2); p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor("#1e293b"),9,Qt.SolidLine,Qt.RoundCap))
-        p.drawArc(rect,int(self.arc_start*16),int(-self.arc_span*16))
-        def seg(v0,v1,col):
-            a0=self._angle(v0); a1=self._angle(v1)
-            p.setPen(QPen(col,7,Qt.SolidLine,Qt.RoundCap))
-            p.drawArc(rect,int(a0*16),int((a1-a0)*16))
-        seg(self.min_val,self.warn,self.cn); seg(self.warn,self.danger,self.cw); seg(self.danger,self.max_val,self.cd)
-        steps=7
-        for i in range(steps+1):
-            ratio=i/steps; val=self.min_val+ratio*(self.max_val-self.min_val)
-            ang=math.radians(self._angle(val)); ca,sa=math.cos(ang),-math.sin(ang)
-            p.setPen(QPen(QColor("#334155"),1.5))
-            p.drawLine(QPointF(cx+ca*(r-20),cy+sa*(r-20)),QPointF(cx+ca*(r-10),cy+sa*(r-10)))
-            p.setFont(QFont("Segoe UI",max(6,int(r*0.09)))); p.setPen(QPen(QColor("#64748b")))
-            p.drawText(QRectF(cx+ca*(r-34)-12,cy+sa*(r-34)-9,24,18),Qt.AlignCenter,str(int(val)))
-        ang=math.radians(self._angle(self._value)); ca,sa=math.cos(ang),-math.sin(ang)
-        p.setPen(QPen(QColor("white"),2,Qt.SolidLine,Qt.RoundCap))
-        p.drawLine(QPointF(cx-ca*12,cy-sa*12),QPointF(cx+ca*(r-18),cy+sa*(r-18)))
-        p.setPen(Qt.NoPen); p.setBrush(QBrush(QColor("#1e293b"))); p.drawEllipse(QRectF(cx-8,cy-8,16,16))
-        p.setBrush(QBrush(QColor("#38bdf8"))); p.drawEllipse(QRectF(cx-4,cy-4,8,8))
-        vcol=self.cn if self._value<self.warn else(self.cw if self._value<self.danger else self.cd)
-        p.setPen(QPen(vcol)); p.setFont(QFont("Segoe UI",int(r*0.18),QFont.Bold))
-        p.drawText(QRectF(cx-r*0.5,cy+r*0.15,r,r*0.3),Qt.AlignCenter,str(int(self._value)))
-        p.setFont(QFont("Segoe UI",int(r*0.09))); p.setPen(QPen(QColor("#64748b")))
-        p.drawText(QRectF(cx-r*0.5,cy+r*0.33,r,r*0.2),Qt.AlignCenter,self.unit)
-        p.setFont(QFont("Segoe UI",int(r*0.09),QFont.Bold)); p.setPen(QPen(QColor("#334155")))
-        p.drawText(QRectF(cx-r,cy-r*0.4,r*2,r*0.22),Qt.AlignCenter,self.label)
-        p.end()
+from ui.oem_analog.widgets.warning_icons import (
+    HeadlightIcon,
+    EngineIcon,
+    GenericWarningIcon
+)
 
 
 class AnalogCluster(QWidget):
-    def __init__(self, energy_model=None):
-        super().__init__()
-        self.setStyleSheet("QWidget{background:#070f1d;color:white;font-family:'Segoe UI';} QLabel{background:transparent;} #topBar{background:#050c18;border-bottom:1px solid #1e293b;} #infoBar{background:#050c18;border-top:1px solid #1e293b;} QPushButton{background:#0f172a;border:1px solid #1e293b;border-radius:8px;color:white;padding:6px 14px;font-size:11px;font-weight:bold;} #refuelBtn{background:#16a34a;}")
-        root=QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
 
-        top=QFrame(); top.setObjectName("topBar"); top.setFixedHeight(44)
-        tl=QHBoxLayout(top); tl.setContentsMargins(16,0,16,0)
-        logo=QLabel("SUPRAJIT"); logo.setStyleSheet("color:#38bdf8;font-size:20px;font-weight:bold;letter-spacing:4px;")
-        sub=QLabel("ANALOG CLUSTER"); sub.setStyleSheet("color:#475569;font-size:10px;letter-spacing:2px;")
-        self.live=QLabel("● LIVE"); self.live.setStyleSheet("color:#22c55e;font-size:10px;font-weight:bold;")
-        tl.addWidget(logo); tl.addSpacing(10); tl.addWidget(sub); tl.addStretch(); tl.addWidget(self.live)
-        root.addWidget(top)
+    def __init__(self, energy_model=None, parent=None):
 
-        body=QHBoxLayout(); body.setContentsMargins(16,12,16,12); body.setSpacing(20)
-        self.speed_gauge=GaugeWidget("SPEED","km/h",0,140,warn=60,danger=100)
-        self.speed_gauge.setMinimumSize(400,400)
-        right_col=QVBoxLayout(); right_col.setSpacing(16)
-        self.rpm_gauge=GaugeWidget("RPM ×100","",0,80,warn=55,danger=70)
-        self.rpm_gauge.setMinimumSize(180,180)
-        self.fuel_gauge=GaugeWidget("FUEL","%",0,100,warn=30,danger=15,
-                                     c_normal="#22c55e",c_warn="#f59e0b",c_danger="#ef4444")
-        self.fuel_gauge.setMinimumSize(180,180)
-        right_col.addWidget(self.rpm_gauge,1); right_col.addWidget(self.fuel_gauge,1)
-        body.addWidget(self.speed_gauge,3); body.addLayout(right_col,2)
-        root.addLayout(body,1)
+        super().__init__(parent)
 
-        info=QFrame(); info.setObjectName("infoBar"); info.setFixedHeight(48)
-        il=QHBoxLayout(info); il.setContentsMargins(16,0,16,0); il.setSpacing(30)
-        self.lbl_trip=self._pair("TRIP A","0.0 km")
-        self.lbl_odo=self._pair("ODO","0.0 km")
-        self.lbl_range=self._pair("RANGE","300 km")
-        self.temp_pair=self._pair("ENG TEMP","45°C")
-        self.refuel_btn=QPushButton("⛽  REFUEL"); self.refuel_btn.setObjectName("refuelBtn")
-        self.refuel_btn.setFixedHeight(30); self.refuel_btn.setVisible(False)
-        for w in [self.lbl_trip,self.lbl_odo,self.lbl_range,self.temp_pair]: il.addWidget(w)
-        il.addStretch(); il.addWidget(self.refuel_btn)
-        root.addWidget(info)
+        self.setStyleSheet("""
+            background:#07090d;
+            color:#d0e0f0;
+        """)
 
-    def _pair(self,title,val):
-        w=QFrame(); lay=QVBoxLayout(w); lay.setContentsMargins(0,4,0,4); lay.setSpacing(0)
-        t=QLabel(title); t.setStyleSheet("color:#475569;font-size:8px;font-weight:bold;letter-spacing:1px;")
-        v=QLabel(val); v.setStyleSheet("color:#e2e8f0;font-size:11px;font-weight:bold;"); v.setObjectName("val")
-        lay.addWidget(t); lay.addWidget(v); return w
+        self.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
 
-    def _set(self,frame,text):
-        frame.findChild(QLabel,"val").setText(text)
+        root = QVBoxLayout(self)
 
-    def set_data(self,speed,fuel,temp,rpm,odo,trip):
-        self.speed_gauge.set_value(speed)
-        self.rpm_gauge.set_value(rpm/100.0)
-        self.fuel_gauge.set_value(fuel)
-        self._set(self.lbl_trip,f"{trip:.1f} km")
-        self._set(self.lbl_odo,f"{odo:.1f} km")
-        self._set(self.lbl_range,f"{int((fuel/100)*300)} km")
-        col="#22c55e" if temp<70 else("#f59e0b" if temp<90 else "#ef4444")
-        v=self.temp_pair.findChild(QLabel,"val")
-        v.setStyleSheet(f"color:{col};font-size:11px;font-weight:bold;"); v.setText(f"{int(temp)}°C")
-        self.refuel_btn.setVisible(fuel<50)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-    def update_cluster(self,speed,fuel):
-        self.set_data(speed,fuel,45,0,0,0)
+        # HEADER
+
+        hdr = QFrame()
+
+        hdr.setFixedHeight(40)
+
+        hdr.setStyleSheet("""
+            background:#0a0d14;
+            border-bottom:1px solid #1a2535;
+        """)
+
+        hl = QHBoxLayout(hdr)
+
+        hl.setContentsMargins(14, 0, 14, 0)
+
+        logo = QLabel("SUPRAJIT")
+
+        logo.setStyleSheet("""
+            color:#d7e3ef;
+            font-size:18px;
+            font-weight:bold;
+            letter-spacing:3px;
+        """)
+
+        sub = QLabel("ANALOG CLUSTER")
+
+        sub.setStyleSheet("""
+            color:#314156;
+            font-size:8px;
+            letter-spacing:2px;
+        """)
+
+        live = QLabel("● LIVE")
+
+        live.setStyleSheet("""
+            color:#22c55e;
+            font-size:9px;
+            font-weight:bold;
+        """)
+
+        hl.addWidget(logo)
+        hl.addSpacing(10)
+        hl.addWidget(sub)
+
+        hl.addStretch()
+
+        hl.addWidget(live)
+
+        root.addWidget(hdr)
+
+        # MAIN SHELL
+
+        shell = AnalogShell()
+
+        shell.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+
+        body = QHBoxLayout(shell)
+
+        body.setContentsMargins(
+            14,
+            10,
+            14,
+            10
+        )
+
+        body.setSpacing(10)
+
+        # LEFT COLUMN
+
+        left_col = QVBoxLayout()
+
+        left_col.setSpacing(8)
+
+        left_col.setAlignment(
+            Qt.AlignTop |
+            Qt.AlignHCenter
+        )
+
+        self.left_ind = IndicatorPanel("left")
+
+        self.headlight_ic = HeadlightIcon()
+
+        self.engine_ic = EngineIcon()
+
+        left_col.addWidget(self.left_ind)
+
+        left_col.addSpacing(6)
+
+        left_col.addWidget(self.headlight_ic)
+
+        left_col.addWidget(self.engine_ic)
+
+        left_col.addStretch()
+
+        # MAIN DIAL
+
+        self.dial = AnalogScreen()
+
+        self.dial.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+
+        # RIGHT COLUMN
+
+        right_col = QVBoxLayout()
+
+        right_col.setSpacing(8)
+
+        right_col.setAlignment(
+            Qt.AlignTop |
+            Qt.AlignHCenter
+        )
+
+        self.right_ind = IndicatorPanel("right")
+
+        self.temp_ic = GenericWarningIcon(
+            "TEMP",
+            "#f59e0b"
+        )
+
+        self.fuel_ic = GenericWarningIcon(
+            "FUEL",
+            "#ef4444"
+        )
+
+        right_col.addWidget(self.right_ind)
+
+        right_col.addSpacing(6)
+
+        right_col.addWidget(self.temp_ic)
+
+        right_col.addWidget(self.fuel_ic)
+
+        right_col.addStretch()
+
+        body.addLayout(left_col, 0)
+
+        body.addWidget(self.dial, 1)
+
+        body.addLayout(right_col, 0)
+
+        root.addWidget(shell, 1)
+
+        # BOTTOM STRIP
+
+        bottom = QFrame()
+
+        bottom.setFixedHeight(110)
+
+        bottom.setStyleSheet("""
+            background:#080b10;
+            border-top:1px solid #151e28;
+        """)
+
+        bl = QHBoxLayout(bottom)
+
+        bl.setContentsMargins(
+            18,
+            6,
+            18,
+            6
+        )
+
+        bl.setSpacing(20)
+
+        self.fuel_gauge = FuelGaugeWidget()
+
+        self.fuel_gauge.setFixedWidth(140)
+
+        stats_panel = QFrame()
+
+        stats_panel.setStyleSheet("""
+            background:transparent;
+            border:none;
+        """)
+
+        sl = QVBoxLayout(stats_panel)
+
+        sl.setContentsMargins(0, 4, 0, 4)
+
+        sl.setSpacing(6)
+
+        self.trip_lbl = self.make_stat(
+            "TRIP A",
+            "0.0 km"
+        )
+
+        self.range_lbl = self.make_stat(
+            "RANGE",
+            "250 km"
+        )
+
+        self.temp_lbl = self.make_stat(
+            "ENG TEMP",
+            "45°C"
+        )
+
+        self.rpm_lbl = self.make_stat(
+            "RPM",
+            "800"
+        )
+
+        sl.addWidget(self.trip_lbl)
+        sl.addWidget(self.range_lbl)
+        sl.addWidget(self.temp_lbl)
+        sl.addWidget(self.rpm_lbl)
+
+        bl.addWidget(self.fuel_gauge)
+
+        bl.addWidget(stats_panel, 1)
+
+        root.addWidget(bottom)
+
+    # ─────────────────────────────
+
+    def make_stat(self, label, value):
+
+        frame = QFrame()
+
+        frame.setStyleSheet("""
+            background:transparent;
+            border:none;
+        """)
+
+        lay = QHBoxLayout(frame)
+
+        lay.setContentsMargins(0, 0, 0, 0)
+
+        lay.setSpacing(6)
+
+        lbl = QLabel(label + ":")
+
+        lbl.setStyleSheet("""
+            color:#334155;
+            font-size:9px;
+            font-weight:bold;
+        """)
+
+        val = QLabel(value)
+
+        val.setObjectName("value")
+
+        val.setStyleSheet("""
+            color:#d7e3ef;
+            font-size:11px;
+            font-weight:bold;
+        """)
+
+        lay.addWidget(lbl)
+
+        lay.addWidget(val)
+
+        lay.addStretch()
+
+        return frame
+
+    # ─────────────────────────────
+
+    def set_stat(self, frame, text):
+
+        val = frame.findChild(
+            QLabel,
+            "value"
+        )
+
+        val.setText(text)
+
+    # ─────────────────────────────
+
+    def set_data(
+        self,
+        speed,
+        fuel,
+        temp,
+        rpm=0,
+        odo=0,
+        trip=0
+    ):
+
+        self.dial.set_speed(speed)
+
+        self.dial.set_odo(odo)
+
+        self.dial.set_trip(trip)
+
+        self.fuel_gauge.set_fuel(fuel)
+
+        self.temp_ic.set_on(temp > 95)
+
+        self.engine_ic.set_on(temp > 108)
+
+        self.fuel_ic.set_on(fuel < 15)
+
+        self.set_stat(
+            self.trip_lbl,
+            f"{trip:.1f} km"
+        )
+
+        self.set_stat(
+            self.range_lbl,
+            f"{int(fuel * 2.8)} km"
+        )
+
+        self.set_stat(
+            self.temp_lbl,
+            f"{int(temp)}°C"
+        )
+
+        self.set_stat(
+            self.rpm_lbl,
+            f"{int(rpm)}"
+        )
+
+    # ─────────────────────────────
+
+    def update_cluster(self, speed, fuel):
+
+        self.set_data(
+            speed,
+            fuel,
+            45,
+            0,
+            0,
+            0
+        )
+
+    # ─────────────────────────────
+
+    def set_left_indicator(self, on):
+
+        self.left_ind.set_active(on)
+
+    def set_right_indicator(self, on):
+
+        self.right_ind.set_active(on)
+
+    def set_headlight(self, on):
+
+        self.headlight_ic.set_on(on)
 
 
 AnalogClusterWidget = AnalogCluster
