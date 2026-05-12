@@ -15,6 +15,7 @@ from ui.controls_panel import ControlsPanel
 from ui.digital_cluster import DigitalClusterWidget
 from ui.analog_cluster import AnalogClusterWidget
 from ui.hybrid_cluster import HybridClusterWidget
+from ui.oem_digital.widgets.osm_map_widget import OSMMapWidget
 
 
 STYLE = """
@@ -165,6 +166,20 @@ class MainWindow(QMainWindow):
         self._physics_timer.timeout.connect(
             self._physics_tick
         )
+
+        # MAP WIDGET — parented to main window, floats above TFT
+        self.map_widget = OSMMapWidget(self)
+
+        self.map_widget.setGeometry(
+            36,
+            240,
+            1525,
+            525
+        )
+
+        self.map_widget.hide()
+
+        self.map_widget.raise_()
 
         self._build_ui()
 
@@ -509,6 +524,33 @@ class MainWindow(QMainWindow):
         )
 
     # ─────────────────────────────
+    # NAVIGATION MAP VISIBILITY CONTROLLER
+
+    def _update_navigation_map(self):
+
+        try:
+
+            current = (
+                self.digital_cluster
+                .tft
+                .screen_manager
+                .current_screen
+            )
+
+        except Exception:
+            current = "home"
+
+        if current == "navigation":
+
+            self.map_widget.show()
+
+            self.map_widget.raise_()
+
+        else:
+
+            self.map_widget.hide()
+
+    # ─────────────────────────────
 
     def _start(self):
 
@@ -588,6 +630,12 @@ class MainWindow(QMainWindow):
                 model.speed
             )
         )
+
+        # SIDE STAND: auto-clear once vehicle moves
+        if not hasattr(model, "_side_stand"):
+            model._side_stand = True
+        if model.speed > 2.0:
+            model._side_stand = False
 
         # ODOMETER
 
@@ -702,6 +750,9 @@ class MainWindow(QMainWindow):
         self._status_temp.setText(
             f"{int(model.temp)}°C"
         )
+
+        # POLL NAVIGATION SCREEN — show/hide OSM map every frame
+        self._update_navigation_map()
 
     # ─────────────────────────────
 

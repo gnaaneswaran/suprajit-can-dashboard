@@ -2,38 +2,38 @@ import sys
 import os
 from datetime import datetime
 
-# ── Fix import paths ──────────────────────────────────────────────────────────
-ROOT       = os.path.dirname(os.path.abspath(__file__))          # files/
-OEM_DIR    = os.path.join(ROOT, "ui", "oem_digital")             # files/ui/oem_digital/
-
-for p in (ROOT, OEM_DIR):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+# ── Fix import paths: add the project root to sys.path ───────────────────────
+# main.py lives in:  .../1.Suprajit/files/
+# screens/, services/, ui/ are siblings of main.py → same folder IS the root
+ROOT = os.path.dirname(os.path.abspath(__file__))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt, QTimer
 
 from ui.main_window import MainWindow
-from screens.home_screen import HomeScreen # pyright: ignore[reportMissingImports]
-from screens.menu_screen import MenuScreen # pyright: ignore[reportMissingImports]
-from screens.navigation_screen import NavigationScreen # pyright: ignore[reportMissingImports]
-from screens.settings_screen import SettingsScreen # pyright: ignore[reportMissingImports]
-from screens.vehicle_screen import VehicleScreen # pyright: ignore[reportMissingImports]
-from screens.ride_stats_screen import RideStatsScreen # pyright: ignore[reportMissingImports]
-from screens.bluetooth_screen import BluetoothScreen # pyright: ignore[reportMissingImports]
+from screens.home_screen import HomeScreen
+from screens.menu_screen import MenuScreen
+from screens.navigation_screen import NavigationScreen
+from screens.settings_screen import SettingsScreen
+from screens.vehicle_screen import VehicleScreen
+from screens.ride_stats_screen import RideStatsScreen
+from screens.bluetooth_screen import BluetoothScreen
 from services.screen_manager import ScreenManager
-from ui.oem_digital.widgets.osm_map_widget import OSMMapWidget
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Physics constants
+# Physics / simulation constants
 # ─────────────────────────────────────────────────────────────────────────────
-TICK_MS              = 50
-TICK_S               = TICK_MS / 1000.0
-MAX_SPEED            = 90.0
-ACCEL_RATE           = 6.9
-BRAKE_RATE           = 12.0
-COAST_RATE           = 1.4
-BATTERY_DRAIN_PER_KM = 100.0 / 85.0
+TICK_MS            = 50            # timer interval ms  → 20 Hz physics
+TICK_S             = TICK_MS / 1000.0
+
+MAX_SPEED          = 90.0          # km/h
+ACCEL_RATE         = 6.9           # km/h per second while throttle held
+BRAKE_RATE         = 12.0          # km/h per second while brake held
+COAST_RATE         = 1.4           # km/h per second natural decel
+
+BATTERY_DRAIN_PER_KM = 100.0 / 85.0   # % per km
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Live vehicle state
@@ -64,12 +64,14 @@ class VehicleState:
     def _update_range(self):
         self.range_km = max(0.0, round(self.battery * (85.0 / 78.0), 1))
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Key state
 # ─────────────────────────────────────────────────────────────────────────────
 pressed  = {"up": False, "down": False}
 throttle = {"value": 0}
 brake    = {"value": 0}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Physics tick
@@ -84,8 +86,8 @@ def _physics_tick(state):
     else:
         state.speed = max(0.0, state.speed - COAST_RATE * TICK_S)
 
-    avg_kmh = (prev_speed + state.speed) / 2.0
-    dist_km = avg_kmh * TICK_S / 3600.0
+    avg_kmh  = (prev_speed + state.speed) / 2.0
+    dist_km  = avg_kmh * TICK_S / 3600.0
 
     state.odo    += dist_km
     state.trip_a += dist_km
@@ -96,6 +98,7 @@ def _physics_tick(state):
         state.side_stand_down = False
 
     state._update_time()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Keyboard wiring
@@ -126,6 +129,7 @@ def _wire_keys(win):
     win.keyPressEvent   = keyPressEvent
     win.keyReleaseEvent = keyReleaseEvent
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # main()
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,7 +143,7 @@ def main():
     state = VehicleState()
     _wire_keys(win)
 
-    # Push state into window / screen manager
+    # ── Push state into window / screen manager ───────────────────────────────
     if hasattr(win, "state"):
         win.state = state
     if hasattr(win, "screen_manager"):
@@ -151,7 +155,7 @@ def main():
                 if hasattr(scr, "state"):
                     scr.state = state
 
-    # Physics + repaint timer
+    # ── Physics + repaint timer ───────────────────────────────────────────────
     def tick():
         _physics_tick(state)
         if hasattr(win, "update_state"):
