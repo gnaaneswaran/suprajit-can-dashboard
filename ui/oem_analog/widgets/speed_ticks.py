@@ -1,79 +1,96 @@
 """
 ui/oem_analog/widgets/speed_ticks.py
-──────────────────────────────────────
-Draws tick marks and numeric speed labels for the analog speedometer.
-Matches reference: white major ticks, fine minor ticks, white labels.
+─────────────────────────────────────
+Draws major, medium, and fine tick marks + speed labels on the centre dial.
+All geometry derives from the same ARC_QT_START / ARC_QT_SPAN constants
+as speed_arc.py so ticks are always exactly aligned with the arcs.
 """
 
 import math
-from PyQt5.QtGui  import QPainter, QColor, QPen, QFont
-from PyQt5.QtCore import Qt, QRectF, QPointF
+
+from PyQt5.QtGui  import QPen, QColor, QFont
+from PyQt5.QtCore import Qt, QPointF, QRectF
+
+from .speed_arc import ARC_QT_START, ARC_QT_SPAN, SPEED_MAX
 
 
-TICK_MAJOR_COL = "#d8e8f0"
-TICK_MINOR_COL = "#2e3e50"
-LABEL_COL      = "#dce8f0"
+def _qt_angle_for_speed(speed: float) -> float:
+    """Qt arc-degrees for the given speed value."""
+    pct = max(0.0, min(1.0, speed / SPEED_MAX))
+    return ARC_QT_START + pct * ARC_QT_SPAN
 
 
-def _deg(v: float, max_val: float = 120.0) -> float:
-    return 220.0 - (v / max_val) * 260.0
+def _math_angle(speed: float) -> float:
+    """Standard math angle (radians, CCW from east) for a speed value."""
+    qt_deg = _qt_angle_for_speed(speed)
+    return math.radians(90.0 - qt_deg)
 
 
-def draw_speed_ticks(p: QPainter, cx: float, cy: float, R: float, max_val: float = 120.0):
+def draw_speed_ticks(p, cx: float, cy: float, R: float):
     """
-    Draw tick marks and labels. Call inside cached QPixmap builder.
-    Reference labels: 0, 20, 40, 60, 80, 100, 120
+    Draw tick marks at every 1 km/h interval (fine), 10 km/h (medium),
+    and 20 km/h (major). Labels at every 20 km/h.
     """
-    t_out = R - 18
-    t_maj = R - 34
-    t_med = R - 27
-    t_min = R - 23
-    l_r   = R - 50
+    p.setBrush(Qt.NoBrush)
 
-    # Major ticks + labels every 20 km/h
-    for val in range(0, int(max_val) + 1, 20):
-        ang = math.radians(_deg(val, max_val))
-        ca, sa = math.cos(ang), -math.sin(ang)
+    for v in range(0, int(SPEED_MAX) + 1):
+        is_major = (v % 20 == 0)
+        is_med   = (v % 10 == 0) and not is_major
+        is_fine  = (v %  5 == 0) and not is_med and not is_major
 
-        # Glow
-        p.setPen(QPen(QColor(200, 220, 240, 35), 5))
-        p.drawLine(QPointF(cx + ca * t_maj, cy + sa * t_maj),
-                   QPointF(cx + ca * t_out,  cy + sa * t_out))
-        # Solid tick
-        p.setPen(QPen(QColor(TICK_MAJOR_COL), 2.2))
-        p.drawLine(QPointF(cx + ca * t_maj, cy + sa * t_maj),
-                   QPointF(cx + ca * t_out,  cy + sa * t_out))
-
-        # Label
-        f = QFont("Segoe UI", max(7, int(R * 0.088)))
-        f.setBold(True)
-        p.setFont(f)
-        p.setPen(QPen(QColor(LABEL_COL)))
-        tw, th = 36, 22
-        p.drawText(QRectF(cx + ca * l_r - tw/2, cy + sa * l_r - th/2, tw, th),
-                   Qt.AlignCenter, str(val))
-
-    # Medium ticks every 10 km/h
-    for val in range(10, int(max_val) + 1, 10):
-        if val % 20 == 0:
+        if not (is_major or is_med or is_fine):
             continue
-        ang = math.radians(_deg(val, max_val))
-        ca, sa = math.cos(ang), -math.sin(ang)
-        p.setPen(QPen(QColor("#283848"), 1.5))
-        p.drawLine(QPointF(cx + ca * t_med, cy + sa * t_med),
-                   QPointF(cx + ca * t_out,  cy + sa * t_out))
 
-    # Minor ticks every 5 km/h
-    for val in range(5, int(max_val) + 1, 10):
-        ang = math.radians(_deg(val, max_val))
-        ca, sa = math.cos(ang), -math.sin(ang)
-        p.setPen(QPen(QColor(TICK_MINOR_COL), 1))
-        p.drawLine(QPointF(cx + ca * t_min, cy + sa * t_min),
-                   QPointF(cx + ca * t_out,  cy + sa * t_out))
+        ang = _math_angle(v)
+        cos_a = math.cos(ang)
+        sin_a = math.sin(ang)
 
-    # km/h label
-    kf = QFont("Segoe UI", max(8, int(R * 0.082)))
-    p.setFont(kf)
-    p.setPen(QPen(QColor("#3a5068")))
-    p.drawText(QRectF(cx - 28, cy - R * 0.22, 56, 16),
-               Qt.AlignCenter, "km/h")
+        if is_major:
+            outer = R - 8
+            inner = R - 26
+            lw    = 2.0
+            color = "#c04040" if v >= 80 else "#4898c8"
+        elif is_med:
+            outer = R - 8
+            inner = R - 18
+            lw    = 1.5
+            color = "#702828" if v >= 80 else "#2a6090"
+        else:
+            outer = R - 8
+            inner = R - 13
+            lw    = 1.0
+            color = "#242e38"
+
+        p.setPen(QPen(QColor(color), lw, Qt.SolidLine, Qt.FlatCap))
+        p.drawLine(
+            QPointF(cx + cos_a * inner, cy - sin_a * inner),
+            QPointF(cx + cos_a * outer, cy - sin_a * outer)
+        )
+
+    # ── speed labels at major ticks ──────────────────────────────────
+    label_r = R - 36      # radius for label centres
+
+    for v in range(0, int(SPEED_MAX) + 1, 20):
+        ang   = _math_angle(v)
+        tx    = cx + math.cos(ang) * label_r
+        ty    = cy - math.sin(ang) * label_r
+        color = "#c85050" if v >= 80 else "#90bcd8"
+
+        p.setPen(QColor(color))
+        p.setFont(QFont("Bahnschrift", 10, QFont.Bold))
+        p.drawText(
+            QRectF(tx - 16, ty - 9, 32, 18),
+            Qt.AlignHCenter | Qt.AlignVCenter,
+            str(v)
+        )
+
+    # ── "km/h" unit label ────────────────────────────────────────────
+    p.setPen(QColor("#607888"))
+    p.setFont(QFont("Bahnschrift", 9))
+    # Place between arc centre and dial centre, slightly above pivot
+    label_y = cy - R * 0.20
+    p.drawText(
+        QRectF(cx - 24, label_y - 7, 48, 14),
+        Qt.AlignHCenter | Qt.AlignVCenter,
+        "km/h"
+    )

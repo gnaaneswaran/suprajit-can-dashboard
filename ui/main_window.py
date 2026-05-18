@@ -9,8 +9,11 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 
 from core.fake_data import fake_data_generator, model
-from core.decoder import decode
-
+from core.decoder import decode, decode_frame
+from core.can_frame import CANFrame
+from core.event_dispatcher import dispatcher
+from core.logger import can_logger
+from ui.oem_hybrid.core.serial_reader import SerialReader
 from ui.controls_panel import ControlsPanel
 from ui.digital_cluster import DigitalClusterWidget
 from ui.analog_cluster import AnalogClusterWidget
@@ -138,6 +141,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
 
         super().__init__()
+
+        self.serial_reader = SerialReader()
 
         self.setWindowTitle("Suprajit CAN Bus Analyzer")
 
@@ -559,6 +564,8 @@ class MainWindow(QMainWindow):
 
         self._running = True
 
+        can_logger.start()
+
         self._physics_timer.start()
 
         self.timer = QTimer()
@@ -586,7 +593,8 @@ class MainWindow(QMainWindow):
         self._status_bus.setText("OFF")
 
     # ─────────────────────────────
-    # REALISTIC PHYSICS
+    # PHYSICS — direct hardware mapping
+    # pot position → speed (no accumulation)
     # ─────────────────────────────
 
     def _physics_tick(self):
@@ -595,109 +603,85 @@ class MainWindow(QMainWindow):
 
         MAX_REAL_SPEED = 85.0
 
-        ZERO_TO_80_TIME = 15.0
+        # ── READ POT ──
+        adc = self.serial_reader.value
 
-        ACCEL_PER_SEC = (
-            80.0 / ZERO_TO_80_TIME
-        )
+        # DEADZONE — zero out noise below 150
+        if adc < 150:
+            adc = 0
 
-        # ACCELERATION
+        # CLAMP — guarantee valid range
+        adc = max(0, min(1023, adc))
 
-        if model.throttle:
+        # DIRECT MAP — pot position = target speed
+        # no accumulation, no runaway
+        target_speed = (adc / 1023) * MAX_REAL_SPEED
 
-            model.speed += (
-                ACCEL_PER_SEC * dt
-            )
+        # SMOOTH — gentle lerp so needle doesn't snap
+        model.speed += (target_speed - model.speed) * 0.15
 
-        else:
-
-            model.speed -= (
-                12.0 * dt
-            )
-
-        # BRAKE
-
+        # BRAKE overrides
         if model.brake:
-
-            model.speed -= (
-                28.0 * dt
-            )
+            model.speed *= 0.85
 
         model.speed = max(
             0.0,
-            min(
-                MAX_REAL_SPEED,
-                model.speed
-            )
+            min(MAX_REAL_SPEED, model.speed)
         )
 
-        # SIDE STAND: auto-clear once vehicle moves
+        # ── SIDE STAND ──
         if not hasattr(model, "_side_stand"):
             model._side_stand = True
         if model.speed > 2.0:
             model._side_stand = False
 
-        # ODOMETER
-
+        # ── ODOMETER ──
         if not hasattr(model, "odometer"):
-
             model.odometer = 0.0
 
         if not hasattr(model, "trip"):
-
             model.trip = 0.0
 
-        distance_km = (
-            model.speed * dt
-        ) / 3600.0
+        distance_km = (model.speed * dt) / 3600.0
 
         model.odometer += distance_km
 
         model.trip += distance_km
 
-        # FUEL
-
+        # ── FUEL ──
         if not hasattr(model, "fuel"):
-
             model.fuel = 100.0
 
-        if model.throttle:
-
-            model.fuel -= (
-                model.speed * 0.0008
-            )
+        if adc > 150:
+            model.fuel -= model.speed * 0.0008
 
         model.fuel = max(
             0.0,
-            min(
-                100.0,
-                model.fuel
-            )
+            min(100.0, model.fuel)
         )
 
-        # TEMP
-
+        # ── TEMP ──
         model.temp = (
-            42 +
-            (model.speed * 0.75)
+            42 + (model.speed * 0.75)
         )
 
-        # RPM
-
+        # ── RPM ──
         model.rpm = (
-            1200 +
-            (model.speed * 75)
+            1200 + (model.speed * 75)
         )
 
-        # UPDATE CONTROLS
+        # ── LEAN ANGLE (MPU6050 → ax) ──
+        model.lean = (
+            self.serial_reader.ax / 16384
+        ) * 45
 
+        # ── UPDATE CONTROLS ──
         self.ctrl_panel.update_indicators(
             model.throttle,
             model.brake
         )
 
-        # DIGITAL CLUSTER
-
+        # ── DIGITAL CLUSTER ──
         if hasattr(self.digital_cluster, "speed"):
             self.digital_cluster.speed = model.speed
 
@@ -715,8 +699,7 @@ class MainWindow(QMainWindow):
 
         self.digital_cluster.update()
 
-        # ANALOG CLUSTER
-
+        # ── ANALOG CLUSTER ──
         self.analog_cluster.set_data(
             model.speed,
             model.fuel,
@@ -726,8 +709,7 @@ class MainWindow(QMainWindow):
             model.trip
         )
 
-        # HYBRID CLUSTER
-
+        # ── HYBRID CLUSTER ──
         self.hybrid_cluster.set_data(
             model.speed,
             model.fuel,
@@ -737,8 +719,7 @@ class MainWindow(QMainWindow):
             model.trip
         )
 
-        # STATUS BAR
-
+        # ── STATUS BAR ──
         self._status_speed.setText(
             f"{int(model.speed)} km/h"
         )
@@ -751,7 +732,7 @@ class MainWindow(QMainWindow):
             f"{int(model.temp)}°C"
         )
 
-        # POLL NAVIGATION SCREEN — show/hide OSM map every frame
+        # ── POLL NAVIGATION SCREEN ──
         self._update_navigation_map()
 
     # ─────────────────────────────
@@ -760,63 +741,41 @@ class MainWindow(QMainWindow):
 
         line = next(self.data_gen)
 
-        parts = line.split(",")
-
-        if len(parts) != 4:
+        try:
+            frame = CANFrame.from_string(line)
+        except ValueError:
             return
 
-        timestamp, can_id, dlc, data = parts
+        signals = decode_frame(frame)
+        dispatcher.publish_all(signals)
+        can_logger.log(frame, signals)
+        self.signal_state.update(signals)
 
-        if (
-            self._filter_id == ""
-            or
-            self._filter_id.lower() in can_id.lower()
-        ):
-
-            bg_col, fg_col = ROW_COLORS.get(
-                can_id,
-                ("#0a0f1e", "#e2e8f0")
-            )
-
-            row = self.table.rowCount()
-
-            if row >= self._row_limit:
-
-                self.table.removeRow(0)
-
+        if self.stack.currentIndex() == 0:
+            parts = line.split(",")
+            if len(parts) != 4:
+                return
+            timestamp, can_id, dlc, data = parts
+            if self._filter_id == "" or self._filter_id.lower() in can_id.lower():
+                bg_col, fg_col = ROW_COLORS.get(
+                    can_id, ("#0a0f1e", "#e2e8f0")
+                )
                 row = self.table.rowCount()
+                if row >= self._row_limit:
+                    self.table.removeRow(0)
+                    row = self.table.rowCount()
+                self.table.insertRow(row)
+                for col_i, text in enumerate(
+                    [timestamp, can_id, dlc, data]
+                ):
+                    item = QTableWidgetItem(text)
+                    item.setForeground(QColor(fg_col))
+                    item.setBackground(QColor(bg_col))
+                    self.table.setItem(row, col_i, item)
+                self.table.scrollToBottom()
 
-            self.table.insertRow(row)
+    # ─────────────────────────────
 
-            for col_i, text in enumerate([
-                timestamp,
-                can_id,
-                dlc,
-                data
-            ]):
-
-                item = QTableWidgetItem(text)
-
-                item.setForeground(
-                    QColor(fg_col)
-                )
-
-                item.setBackground(
-                    QColor(bg_col)
-                )
-
-                self.table.setItem(
-                    row,
-                    col_i,
-                    item
-                )
-
-            self.table.scrollToBottom()
-
-        decoded = decode(can_id, data)
-
-        if decoded["type"]:
-
-            self.signal_state[
-                decoded["type"]
-            ] = decoded["value"]
+    def closeEvent(self, event):
+        can_logger.stop()
+        super().closeEvent(event)

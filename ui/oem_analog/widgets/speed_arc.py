@@ -1,58 +1,65 @@
 """
 ui/oem_analog/widgets/speed_arc.py
 ────────────────────────────────────
-Draws the blue (0-60) and red (80-120) speed arcs
-matching the Honda Activa / Suzuki analog cluster reference.
-Renders into a supplied QPainter at given cx, cy, R.
+Draws the blue (0-80) and red (80-120) speed arcs on the centre dial.
+
+Arc geometry (shared with ticks + needle):
+  Qt arc convention: 0° = 3-o'clock, positive = CCW
+  0 km/h  → Qt 75°   (= 15° CW from 12-o'clock)
+  120 km/h→ Qt -75°  (= 165° CW from 12-o'clock)
+  span    = -150° (clockwise sweep)
 """
 
-import math
-from PyQt5.QtGui  import QPainter, QColor, QPen
-from PyQt5.QtCore import Qt
+from PyQt5.QtGui  import QPen, QColor
+from PyQt5.QtCore import Qt, QRectF
+
+# ── Shared arc constants ──────────────────────────────────────────────────────
+# Import these in speed_ticks.py and speed_needle.py too.
+ARC_QT_START = -75      # Qt degrees: 0 km/h on LEFT (traditional cluster)
+ARC_QT_SPAN  =  150     # Qt degrees: positive = CCW → sweeps left to right
+SPEED_MAX    = 120.0    # km/h
 
 
-# Arc colour constants — match reference image
-ARC_BLUE  = "#3a8fd4"   # 0–60 km/h zone
-ARC_RED   = "#e03030"   # 80–120 km/h zone
-ARC_TRACK = "#1a1a1a"   # background track
+def _qt_span_for_speed(speed: float) -> float:
+    """Filled span (Qt degrees) from start to the given speed."""
+    pct = max(0.0, min(1.0, speed / SPEED_MAX))
+    return ARC_QT_SPAN * pct
 
 
-def _deg(v: float, max_val: float = 120.0) -> float:
-    """Map 0–max_val → 220° down to -40° (260° sweep)."""
-    return 220.0 - (v / max_val) * 260.0
-
-
-def draw_speed_arcs(p: QPainter, cx: float, cy: float, R: float, max_val: float = 120.0):
+def draw_speed_arcs(p, cx: float, cy: float, R: float):
     """
-    Draw the three-zone speed arc (track + blue + red) onto p.
-    Call this inside a cached QPixmap builder.
-
-    Zones:
-        0  – 60  → blue
-        60 – 80  → dark gap (no colour, just track)
-        80 – 120 → red
+    Draw the two-tone speed arc track:
+      • Full background track (dark)
+      • Blue  segment: 0 – 80 km/h
+      • Red   segment: 80 – 120 km/h
     """
-    ar = R - 14
-    from PyQt5.QtCore import QRectF
-    rect = QRectF(cx - ar, cy - ar, ar * 2, ar * 2)
+    arc_r   = R - 15          # radius of the arc track
+    rect    = QRectF(cx - arc_r, cy - arc_r, arc_r * 2, arc_r * 2)
+    lw      = 10              # track line width
 
-    # ── Background track ──────────────────────────────────────
-    p.setPen(QPen(QColor(ARC_TRACK), 14, Qt.SolidLine, Qt.RoundCap))
+    # ── background track ────────────────────────────────────────────
+    p.setPen(QPen(QColor("#141414"), lw + 2, Qt.SolidLine, Qt.RoundCap))
     p.setBrush(Qt.NoBrush)
-    a0 = _deg(0, max_val); span = _deg(max_val, max_val) - a0
-    p.drawArc(rect, int(a0 * 16), int(span * 16))
+    p.drawArc(rect, ARC_QT_START * 16, ARC_QT_SPAN * 16)
 
-    # ── Blue zone: 0–60 ───────────────────────────────────────
-    def arc(v0, v1, col, width=9):
-        a_start = _deg(v0, max_val)
-        a_span  = _deg(v1, max_val) - a_start
-        # glow
-        gc = QColor(col); gc.setAlpha(50)
-        p.setPen(QPen(gc, width + 8, Qt.SolidLine, Qt.RoundCap))
-        p.drawArc(rect, int(a_start * 16), int(a_span * 16))
-        # solid
-        p.setPen(QPen(QColor(col), width, Qt.SolidLine, Qt.RoundCap))
-        p.drawArc(rect, int(a_start * 16), int(a_span * 16))
+    # ── blue zone: 0 → 80 km/h ──────────────────────────────────────
+    blue_span = _qt_span_for_speed(80.0)        # fraction of total span
 
-    arc(0,  60,  ARC_BLUE)
-    arc(80, 120, ARC_RED)
+    p.setPen(QPen(QColor("#1878b8"), lw, Qt.SolidLine, Qt.RoundCap))
+    p.drawArc(rect, ARC_QT_START * 16, int(blue_span) * 16)
+
+    # highlight stripe on blue arc
+    p.setPen(QPen(QColor(60, 140, 210, 70), 3, Qt.SolidLine, Qt.RoundCap))
+    p.drawArc(rect, ARC_QT_START * 16, int(blue_span) * 16)
+
+    # ── red zone: 80 → 120 km/h ─────────────────────────────────────
+    # Red arc starts where blue ends.
+    red_qt_start = ARC_QT_START + int(blue_span)
+    red_span     = ARC_QT_SPAN - int(blue_span)   # remaining span (negative)
+
+    p.setPen(QPen(QColor("#922020"), lw, Qt.SolidLine, Qt.RoundCap))
+    p.drawArc(rect, red_qt_start * 16, int(red_span) * 16)
+
+    # highlight stripe on red arc
+    p.setPen(QPen(QColor(190, 60, 60, 70), 3, Qt.SolidLine, Qt.RoundCap))
+    p.drawArc(rect, red_qt_start * 16, int(red_span) * 16)
