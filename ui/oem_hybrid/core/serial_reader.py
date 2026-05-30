@@ -1,30 +1,62 @@
 import serial
 import threading
+import json
 
 
 class SerialReader:
 
-    def __init__(self, port='COM7', baud=115200):
+    def __init__(self, port="COM8", baud=115200):
 
-        self.value = 0    # potentiometer ADC (0–1023)
-        self.ax = 0       # MPU6050 X acceleration
-        self.ay = 0       # MPU6050 Y acceleration
-        self.az = 0       # MPU6050 Z acceleration
+        self.value = 0
+        self.percent = 0
+
+        self.ax = 0
+        self.ay = 0
+        self.az = 0
+
+        self.json_data = {}
+
+        self.connected = False
 
         try:
-            self.serial = serial.Serial(port, baud, timeout=1)
+
+            self.serial = serial.Serial(
+                port=port,
+                baudrate=baud,
+                timeout=1
+            )
+
+            self.connected = True
+
+            print()
+            print("=================================")
+            print("SERIAL READER STARTED")
+            print(f"PORT : {port}")
+            print(f"BAUD : {baud}")
+            print("=================================")
+            print()
+
         except Exception as e:
-            print(f"[SerialReader] Could not open {port}: {e}")
+
+            print()
+            print("=================================")
+            print("SERIAL CONNECTION FAILED")
+            print(f"PORT : {port}")
+            print(f"ERROR: {e}")
+            print("=================================")
+            print()
+
             self.serial = None
             return
 
         self.thread = threading.Thread(
-            target=self.read_loop,
+            target=self._read_loop,
             daemon=True
         )
+
         self.thread.start()
 
-    def read_loop(self):
+    def _read_loop(self):
 
         while True:
 
@@ -33,20 +65,81 @@ class SerialReader:
                 if self.serial is None:
                     break
 
+                if not self.serial.is_open:
+                    break
+
                 line = (
                     self.serial
                     .readline()
-                    .decode('utf-8', errors='ignore')
+                    .decode(
+                        "utf-8",
+                        errors="ignore"
+                    )
                     .strip()
                 )
 
-                parts = line.split(",")
+                if line:
+                    print("RAW:", repr(line))
 
-                if len(parts) == 4:
-                    self.value = int(parts[0])
-                    self.ax    = int(parts[1])
-                    self.ay    = int(parts[2])
-                    self.az    = int(parts[3])
+                if not line:
+                    continue
 
-            except Exception:
-                pass
+                if line.startswith("{"):
+
+                    try:
+
+                        data = json.loads(line)
+
+                        self.json_data = data
+
+                        self.value = int(
+                            data.get(
+                                "adc",
+                                0
+                            )
+                        )
+
+                        self.percent = int(
+                            data.get(
+                                "percent",
+                                0
+                            )
+                        )
+
+                        self.ax = int(
+                            data.get(
+                                "ax",
+                                0
+                            )
+                        )
+
+                        self.ay = int(
+                            data.get(
+                                "ay",
+                                0
+                            )
+                        )
+
+                        self.az = int(
+                            data.get(
+                                "az",
+                                0
+                            )
+                        )
+
+                        print(
+                            f"ADC={self.value} "
+                            f"PERCENT={self.percent}"
+                        )
+
+                    except Exception as e:
+
+                        print(
+                            f"[JSON ERROR] {e}"
+                        )
+
+            except Exception as e:
+
+                print(
+                    f"[SERIAL READ ERROR] {e}"
+                )

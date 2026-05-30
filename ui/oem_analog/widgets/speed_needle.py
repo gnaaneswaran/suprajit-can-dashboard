@@ -32,8 +32,8 @@ class NeedlePhysics:
         self._vel = 0.0        # current velocity (speed units / frame)
 
         # Tune these for desired feel:
-        self.spring   = 0.12   # restoring force  (higher = faster response)
-        self.damping  = 0.72   # velocity decay   (lower = more overshoot)
+        self.spring   = 0.04   # restoring force  (higher = faster response)
+        self.damping  = 0.85   # velocity decay   (lower = more overshoot)
 
     def tick(self, target: float) -> float:
         error       = target - self._pos
